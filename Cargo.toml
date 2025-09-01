@@ -2,7 +2,7 @@
 name = "seshat"
 version = "4.0.1"
 authors = ["Damir Jelić <poljar@termina.org.uk>"]
-edition = "2018"
+edition = "2024"
 license = "Apache-2.0"
 description = "A matrix message logger with full text search support"
 readme = "README.md"
@@ -28,7 +28,7 @@ bundled-sqlcipher = [
 ]
 
 [dependencies]
-tantivy = "0.15.0"
+tantivy = "0.25.0"
 # tantivy = "=0.12.0" # Element desktop tantivy version
 tinysegmenter = "0.1.1"
 rusqlite = "0.35.0"

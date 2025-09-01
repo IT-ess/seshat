@@ -24,10 +24,10 @@ use std::{
 };
 
 use lru_cache::LruCache;
-use tantivy as tv;
+use tantivy::{self as tv, TantivyDocument, schema::Value};
 use tantivy::{
-    collector::{Count, MultiCollector, TopDocs},
     Term,
+    collector::{Count, MultiCollector, TopDocs},
 };
 use uuid::Uuid;
 
@@ -150,7 +150,7 @@ impl Writer {
     }
 
     pub fn add_event(&mut self, event: &Event) {
-        let mut doc = tv::Document::default();
+        let mut doc = tv::TantivyDocument::default();
 
         match event.event_type {
             EventType::Message => doc.add_text(self.body_field, &event.content_value),
@@ -163,7 +163,7 @@ impl Writer {
         doc.add_text(self.sender_field, &event.sender);
         doc.add_u64(self.date_field, event.server_ts as u64);
 
-        self.inner.add_document(doc);
+        let _ = self.inner.add_document(doc);
         self.added_events += 1;
     }
 
@@ -180,7 +180,7 @@ impl Writer {
 }
 
 pub(crate) struct IndexSearcher {
-    inner: tv::LeasedItem<tv::Searcher>,
+    inner: tv::Searcher,
     schema: tv::schema::Schema,
     tokenizer: tv::tokenizer::TokenizerManager,
     body_field: tv::schema::Field,
@@ -249,8 +249,10 @@ impl IndexSearcher {
         let count_handle = multicollector.add_collector(Count);
 
         let (mut result, top_docs) = if order_by_recency {
-            let top_docs_handle = multicollector
-                .add_collector(TopDocs::with_limit(limit).order_by_u64_field(self.date_field));
+            let top_docs_handle = multicollector.add_collector(
+                TopDocs::with_limit(limit)
+                    .order_by_u64_field(self.date_field.field_id(), tantivy::Order::Asc),
+            );
 
             let mut result = self.inner.search(query, &multicollector)?;
             let mut top_docs = top_docs_handle.extract(&mut result);
@@ -277,13 +279,13 @@ impl IndexSearcher {
         let end = count == top_docs.len();
 
         for (score, docaddress) in top_docs {
-            let doc = match self.inner.doc(docaddress) {
+            let doc: TantivyDocument = match self.inner.doc(docaddress) {
                 Ok(d) => d,
                 Err(_e) => continue,
             };
 
             let event_id: EventId = match doc.get_first(self.event_id_field) {
-                Some(s) => s.text().unwrap().to_owned(),
+                Some(s) => s.as_str().unwrap().to_owned(),
                 None => continue,
             };
 
@@ -417,10 +419,12 @@ impl Index {
         match config.language {
             Language::Unknown => (),
             _ => {
-                let tokenizer = tv::tokenizer::TextAnalyzer::from(tv::tokenizer::SimpleTokenizer)
-                    .filter(tv::tokenizer::RemoveLongFilter::limit(40))
-                    .filter(tv::tokenizer::LowerCaser)
-                    .filter(tv::tokenizer::Stemmer::new(config.language.as_tantivy()));
+                let tokenizer =
+                    tv::tokenizer::TextAnalyzer::builder(tv::tokenizer::SimpleTokenizer::default())
+                        .filter(tv::tokenizer::RemoveLongFilter::limit(40))
+                        .filter(tv::tokenizer::LowerCaser)
+                        .filter(tv::tokenizer::Stemmer::new(config.language.as_tantivy()))
+                        .build();
                 index.tokenizers().register(&tokenizer_name, tokenizer);
             }
         }

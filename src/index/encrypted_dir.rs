@@ -531,14 +531,14 @@ impl Directory for EncryptedMmapDirectory {
     fn get_file_handle(
         &self,
         path: &Path,
-    ) -> Result<Box<dyn tantivy::directory::FileHandle>, OpenReadError> {
+    ) -> Result<Arc<dyn tantivy::directory::FileHandle>, OpenReadError> {
         let file_handle = self.mmap_dir.get_file_handle(path)?;
 
         let len = file_handle.len();
 
         // Wrap the file handle to provide decryption capabilities
-        Ok(Box::new(EncryptedFileHandle {
-            inner: Arc::new(file_handle),
+        Ok(Arc::new(EncryptedFileHandle {
+            inner: file_handle,
             encryption_key: self.encryption_key.clone(),
             mac_key: self.mac_key.clone(),
             iv_size: IV_SIZE,
@@ -559,7 +559,7 @@ impl Directory for EncryptedMmapDirectory {
         let file = match self.mmap_dir.open_write(path)?.into_inner() {
             Ok(f) => f,
             Err(e) => {
-                let error = IoError::from(e);
+                let error = Arc::new(IoError::from(e));
                 return Err(OpenWriteError::IoError {
                     io_error: error,
                     filepath: path.to_path_buf(),
@@ -630,12 +630,19 @@ impl Directory for EncryptedMmapDirectory {
         // placed on them using e.g. flock(2) on macOS and Linux.
         self.mmap_dir.acquire_lock(lock)
     }
+
+    fn sync_directory(&self) -> std::io::Result<()> {
+        self.mmap_dir.sync_directory()
+    }
 }
 
 // This Tantivy trait is used to indicate when no more writes are expected to be
 // done on a writer.
-impl<E: StreamCipher + KeyIvInit, M: Mac + NewMac, W: Write> TerminatingWrite
-    for AesWriter<E, M, W>
+impl<
+        E: StreamCipher + KeyIvInit + Send + Sync,
+        M: Mac + NewMac + Send + Sync,
+        W: Write + Send + Sync,
+    > TerminatingWrite for AesWriter<E, M, W>
 {
     fn terminate_ref(&mut self, _: AntiCallToken) -> std::io::Result<()> {
         self.finalize()
@@ -645,7 +652,7 @@ impl<E: StreamCipher + KeyIvInit, M: Mac + NewMac, W: Write> TerminatingWrite
 // Custom FileHandle implementation for encrypted files
 #[derive(Debug)]
 struct EncryptedFileHandle {
-    inner: Arc<Box<dyn FileHandle>>,
+    inner: Arc<dyn FileHandle>,
     encryption_key: Zeroizing<Vec<u8>>,
     mac_key: Zeroizing<Vec<u8>>,
     iv_size: usize,
