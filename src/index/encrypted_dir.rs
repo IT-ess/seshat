@@ -17,6 +17,7 @@ use std::{
     fs::File,
     io::{BufWriter, Cursor, Error as IoError, ErrorKind, Read, Write},
     path::Path,
+    sync::Arc,
 };
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
@@ -30,10 +31,13 @@ use hmac::{Hmac, Mac, NewMac};
 use pbkdf2::pbkdf2;
 use sha2::{Sha256, Sha512};
 
-use tantivy::directory::{
-    error::{DeleteError, LockError, OpenReadError, OpenWriteError},
-    AntiCallToken, Directory, DirectoryLock, Lock, TerminatingWrite, WatchCallback, WatchHandle,
-    WritePtr,
+use tantivy::{
+    directory::{
+        error::{DeleteError, LockError, OpenReadError, OpenWriteError},
+        AntiCallToken, Directory, DirectoryLock, FileHandle, Lock, OwnedBytes, TerminatingWrite,
+        WatchCallback, WatchHandle, WritePtr,
+    },
+    HasLen,
 };
 
 use zeroize::Zeroizing;
@@ -522,13 +526,24 @@ impl EncryptedMmapDirectory {
 }
 
 // The Directory trait[dr] implementation for our EncryptedMmapDirectory.
-// [dr] https://docs.rs/tantivy/0.10.2/tantivy/directory/trait.Directory.html
 impl Directory for EncryptedMmapDirectory {
     fn get_file_handle(
         &self,
         path: &Path,
     ) -> Result<Box<dyn tantivy::directory::FileHandle>, OpenReadError> {
-        self.mmap_dir.get_file_handle(path)
+        let file_handle = self.mmap_dir.get_file_handle(path)?;
+
+        let len = file_handle.len();
+
+        // Wrap the file handle to provide decryption capabilities
+        Ok(Box::new(EncryptedFileHandle {
+            inner: Arc::new(file_handle),
+            encryption_key: self.encryption_key.clone(),
+            mac_key: self.mac_key.clone(),
+            iv_size: IV_SIZE,
+            mac_length: MAC_LENGTH,
+            file_length: len,
+        }))
     }
 
     fn delete(&self, path: &Path) -> Result<(), DeleteError> {
@@ -623,6 +638,54 @@ impl<E: StreamCipher + KeyIvInit, M: Mac + NewMac, W: Write> TerminatingWrite
 {
     fn terminate_ref(&mut self, _: AntiCallToken) -> std::io::Result<()> {
         self.finalize()
+    }
+}
+
+// Custom FileHandle implementation for encrypted files
+struct EncryptedFileHandle {
+    inner: Arc<Box<dyn FileHandle>>,
+    encryption_key: Zeroizing<Vec<u8>>,
+    mac_key: Zeroizing<Vec<u8>>,
+    iv_size: usize,
+    mac_length: usize,
+    file_length: usize,
+}
+
+impl HasLen for EncryptedFileHandle {
+    fn len(&self) -> usize {
+        self.file_length
+    }
+}
+
+impl FileHandle for EncryptedFileHandle {
+    fn read_bytes(&self, offset: usize, len: usize) -> Result<OwnedBytes, std::io::Error> {
+        let data = self.inner.read_bytes(offset, len)?;
+        // .map_err(|e| OpenReadError::IOError {
+        //     io_error: e.into(),
+        //     filepath: PathBuf::from("unknown"),
+        // })?;
+
+        // Create a reader for decryption
+        let mut reader = AesReader::<Aes256Ctr, _>::new::<Hmac<Sha256>>(
+            Cursor::new(data),
+            &self.encryption_key,
+            &self.mac_key,
+            self.iv_size,
+            self.mac_length,
+        )?;
+        // .map_err(|e| OpenReadError::IOError {
+        //     io_error: e.into(),
+        //     filepath: PathBuf::from("unknown"),
+        // })?;
+
+        let mut decrypted = Vec::new();
+        reader.read_to_end(&mut decrypted)?;
+        // .map_err(|e| OpenReadError::IOError {
+        //     io_error: e.into(),
+        //     filepath: PathBuf::from("unknown"),
+        // })?;
+
+        Ok(OwnedBytes::new(decrypted))
     }
 }
 
