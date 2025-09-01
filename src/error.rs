@@ -14,6 +14,8 @@
 
 use thiserror::Error;
 
+use tantivy::directory::error::OpenDirectoryError as TantivyOpenDirectoryError;
+
 /// Result type for seshat operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -28,16 +30,19 @@ pub enum Error {
     #[error("Sqlite database error: {}", _0)]
     /// Error signaling that there was an error with a Sqlite transaction.
     DatabaseError(#[from] rusqlite::Error),
-    #[error("Index error: {}", _0)]
+    #[error(transparent)]
     /// Error signaling that there was an error with the event indexer.
-    IndexError(tantivy::TantivyError),
-    #[error("File system error: {}", _0)]
+    TantivyError(tantivy::TantivyError),
+    /// Open Directory Error
+    #[error(transparent)]
+    OpenDirectoryError(TantivyOpenDirectoryError),
+    #[error(transparent)]
     /// Error signaling that there was an error while reading from the
     /// filesystem.
     FsError(#[from] fs_extra::error::Error),
     #[error("IO error: {}", _0)]
     /// Error signaling that there was an error while doing a IO operation.
-    IOError(#[from] std::io::Error),
+    IO(#[from] std::io::Error),
     /// Error signaling that the database passphrase was incorrect.
     #[error("Error unlocking the database: {}", _0)]
     DatabaseUnlockError(String),
@@ -56,7 +61,13 @@ pub enum Error {
 }
 
 impl From<tantivy::TantivyError> for Error {
-    fn from(err: tantivy::TantivyError) -> Self {
-        Error::IndexError(err)
+    fn from(err: tantivy::TantivyError) -> Error {
+        Error::TantivyError(err)
+    }
+}
+
+impl From<TantivyOpenDirectoryError> for Error {
+    fn from(err: TantivyOpenDirectoryError) -> Error {
+        Error::OpenDirectoryError(err)
     }
 }

@@ -205,7 +205,7 @@ impl IndexSearcher {
         let term = if let Some(room) = &config.room_id {
             keys.push(self.room_id_field);
             // :TCHAP: replace AND by +, starting from tantivy 0.13 the query with AND is described differently, which will affect the score only
-            // By replacing with +, we indicate that the second term is also mandatory, otherwise all the events of the room will be send 
+            // By replacing with +, we indicate that the second term is also mandatory, otherwise all the events of the room will be send
             // format!("+room_id:\"{}\" AND ({})", room, term)
             format!("+room_id:\"{}\" +({})", room, term)
         } else if term.is_empty() {
@@ -390,7 +390,7 @@ impl IndexSearcher {
 }
 
 impl Index {
-    pub fn new<P: AsRef<Path>>(path: P, config: &Config) -> Result<Index, tv::TantivyError> {
+    pub fn new<P: AsRef<Path>>(path: P, config: &Config) -> crate::Result<Index> {
         let tokenizer_name = config.language.as_tokenizer_name();
 
         let text_field_options = Index::create_text_options(&tokenizer_name);
@@ -444,15 +444,15 @@ impl Index {
         path: P,
         config: &Config,
         schema: tv::schema::Schema,
-    ) -> tv::Result<tv::Index> {
+    ) -> crate::Result<tv::Index> {
         match &config.passphrase {
             Some(p) => {
                 let dir = EncryptedMmapDirectory::open_or_create(path, p, PBKDF_COUNT)?;
-                tv::Index::open_or_create(dir, schema)
+                tv::Index::open_or_create(dir, schema).map_err(|e| e.into())
             }
             None => {
                 let dir = tv::directory::MmapDirectory::open(path)?;
-                tv::Index::open_or_create(dir, schema)
+                tv::Index::open_or_create(dir, schema).map_err(|e| e.into())
             }
         }
     }
@@ -472,7 +472,7 @@ impl Index {
         path: P,
         old_passphrase: &str,
         new_passphrase: &str,
-    ) -> Result<(), tv::TantivyError> {
+    ) -> crate::Result<()> {
         EncryptedMmapDirectory::change_passphrase(
             path,
             old_passphrase,
