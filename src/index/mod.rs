@@ -24,10 +24,10 @@ use std::{
 };
 
 use lru_cache::LruCache;
-use tantivy as tv;
+use tantivy::{self as tv, TantivyDocument, schema::Value};
 use tantivy::{
-    collector::{Count, MultiCollector, TopDocs},
     Term,
+    collector::{Count, MultiCollector, TopDocs},
 };
 use uuid::Uuid;
 
@@ -150,7 +150,7 @@ impl Writer {
     }
 
     pub fn add_event(&mut self, event: &Event) {
-        let mut doc = tv::Document::default();
+        let mut doc = tv::TantivyDocument::default();
 
         match event.event_type {
             EventType::Message => doc.add_text(self.body_field, &event.content_value),
@@ -163,7 +163,7 @@ impl Writer {
         doc.add_text(self.sender_field, &event.sender);
         doc.add_u64(self.date_field, event.server_ts as u64);
 
-        self.inner.add_document(doc);
+        let _ = self.inner.add_document(doc);
         self.added_events += 1;
     }
 
@@ -180,7 +180,7 @@ impl Writer {
 }
 
 pub(crate) struct IndexSearcher {
-    inner: tv::LeasedItem<tv::Searcher>,
+    inner: tv::Searcher,
     schema: tv::schema::Schema,
     tokenizer: tv::tokenizer::TokenizerManager,
     body_field: tv::schema::Field,
@@ -205,7 +205,7 @@ impl IndexSearcher {
         let term = if let Some(room) = &config.room_id {
             keys.push(self.room_id_field);
             // :TCHAP: replace AND by +, starting from tantivy 0.13 the query with AND is described differently, which will affect the score only
-            // By replacing with +, we indicate that the second term is also mandatory, otherwise all the events of the room will be send 
+            // By replacing with +, we indicate that the second term is also mandatory, otherwise all the events of the room will be send
             // format!("+room_id:\"{}\" AND ({})", room, term)
             format!("+room_id:\"{}\" +({})", room, term)
         } else if term.is_empty() {
@@ -249,8 +249,10 @@ impl IndexSearcher {
         let count_handle = multicollector.add_collector(Count);
 
         let (mut result, top_docs) = if order_by_recency {
-            let top_docs_handle = multicollector
-                .add_collector(TopDocs::with_limit(limit).order_by_u64_field(self.date_field));
+            let top_docs_handle = multicollector.add_collector(
+                TopDocs::with_limit(limit)
+                    .order_by_u64_field(self.date_field.field_id(), tantivy::Order::Asc),
+            );
 
             let mut result = self.inner.search(query, &multicollector)?;
             let mut top_docs = top_docs_handle.extract(&mut result);
@@ -277,13 +279,13 @@ impl IndexSearcher {
         let end = count == top_docs.len();
 
         for (score, docaddress) in top_docs {
-            let doc = match self.inner.doc(docaddress) {
+            let doc: TantivyDocument = match self.inner.doc(docaddress) {
                 Ok(d) => d,
                 Err(_e) => continue,
             };
 
             let event_id: EventId = match doc.get_first(self.event_id_field) {
-                Some(s) => s.text().unwrap().to_owned(),
+                Some(s) => s.as_str().unwrap().to_owned(),
                 None => continue,
             };
 
@@ -390,7 +392,7 @@ impl IndexSearcher {
 }
 
 impl Index {
-    pub fn new<P: AsRef<Path>>(path: P, config: &Config) -> Result<Index, tv::TantivyError> {
+    pub fn new<P: AsRef<Path>>(path: P, config: &Config) -> crate::Result<Index> {
         let tokenizer_name = config.language.as_tokenizer_name();
 
         let text_field_options = Index::create_text_options(&tokenizer_name);
@@ -417,10 +419,12 @@ impl Index {
         match config.language {
             Language::Unknown => (),
             _ => {
-                let tokenizer = tv::tokenizer::TextAnalyzer::from(tv::tokenizer::SimpleTokenizer)
-                    .filter(tv::tokenizer::RemoveLongFilter::limit(40))
-                    .filter(tv::tokenizer::LowerCaser)
-                    .filter(tv::tokenizer::Stemmer::new(config.language.as_tantivy()));
+                let tokenizer =
+                    tv::tokenizer::TextAnalyzer::builder(tv::tokenizer::SimpleTokenizer::default())
+                        .filter(tv::tokenizer::RemoveLongFilter::limit(40))
+                        .filter(tv::tokenizer::LowerCaser)
+                        .filter(tv::tokenizer::Stemmer::new(config.language.as_tantivy()))
+                        .build();
                 index.tokenizers().register(&tokenizer_name, tokenizer);
             }
         }
@@ -444,15 +448,15 @@ impl Index {
         path: P,
         config: &Config,
         schema: tv::schema::Schema,
-    ) -> tv::Result<tv::Index> {
+    ) -> crate::Result<tv::Index> {
         match &config.passphrase {
             Some(p) => {
                 let dir = EncryptedMmapDirectory::open_or_create(path, p, PBKDF_COUNT)?;
-                tv::Index::open_or_create(dir, schema)
+                tv::Index::open_or_create(dir, schema).map_err(|e| e.into())
             }
             None => {
                 let dir = tv::directory::MmapDirectory::open(path)?;
-                tv::Index::open_or_create(dir, schema)
+                tv::Index::open_or_create(dir, schema).map_err(|e| e.into())
             }
         }
     }
@@ -472,7 +476,7 @@ impl Index {
         path: P,
         old_passphrase: &str,
         new_passphrase: &str,
-    ) -> Result<(), tv::TantivyError> {
+    ) -> crate::Result<()> {
         EncryptedMmapDirectory::change_passphrase(
             path,
             old_passphrase,
