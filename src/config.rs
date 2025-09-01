@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use uuid::Uuid;
-#[cfg(feature = "encryption")]
+// #[cfg(feature = "encryption")]
 use zeroize::Zeroizing;
 
 use crate::events::{EventType, RoomId};
@@ -220,7 +220,6 @@ impl From<&str> for Language {
 /// Configuration for the seshat database.
 pub struct Config {
     pub(crate) language: Language,
-    #[cfg(feature = "encryption")]
     pub(crate) passphrase: Option<Zeroizing<String>>,
 }
 
@@ -244,7 +243,6 @@ impl Config {
     /// # Arguments
     ///
     /// * `passphrase` - The passphrase of the database.
-    #[cfg(feature = "encryption")]
     pub fn set_passphrase<P: Into<String>>(mut self, passphrase: P) -> Self {
         self.passphrase = Some(Zeroizing::new(passphrase.into()));
         self
@@ -255,7 +253,6 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             language: Language::Unknown,
-            #[cfg(feature = "encryption")]
             passphrase: None,
         }
     }
