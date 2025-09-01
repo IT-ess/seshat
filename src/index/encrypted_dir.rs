@@ -16,6 +16,7 @@ use rand::{thread_rng, Rng};
 use std::{
     fs::File,
     io::{BufWriter, Cursor, Error as IoError, ErrorKind, Read, Write},
+    ops::Range,
     path::Path,
     sync::Arc,
 };
@@ -559,7 +560,7 @@ impl Directory for EncryptedMmapDirectory {
             Ok(f) => f,
             Err(e) => {
                 let error = IoError::from(e);
-                return Err(OpenWriteError::IOError {
+                return Err(OpenWriteError::IoError {
                     io_error: error,
                     filepath: path.to_path_buf(),
                 });
@@ -572,7 +573,7 @@ impl Directory for EncryptedMmapDirectory {
             &self.mac_key,
             IV_SIZE,
         )
-        .map_err(|e| OpenWriteError::IOError {
+        .map_err(|e| OpenWriteError::IoError {
             io_error: e.into(),
             filepath: path.to_path_buf(),
         })?;
@@ -589,7 +590,7 @@ impl Directory for EncryptedMmapDirectory {
             IV_SIZE,
             MAC_LENGTH,
         )
-        .map_err(|e| OpenReadError::IOError {
+        .map_err(|e| OpenReadError::IoError {
             io_error: e.into(),
             filepath: path.to_path_buf(),
         })?;
@@ -597,7 +598,7 @@ impl Directory for EncryptedMmapDirectory {
 
         reader
             .read_to_end(&mut decrypted)
-            .map_err(|e| OpenReadError::IOError {
+            .map_err(|e| OpenReadError::IoError {
                 io_error: e.into(),
                 filepath: path.to_path_buf(),
             })?;
@@ -642,6 +643,7 @@ impl<E: StreamCipher + KeyIvInit, M: Mac + NewMac, W: Write> TerminatingWrite
 }
 
 // Custom FileHandle implementation for encrypted files
+#[derive(Debug)]
 struct EncryptedFileHandle {
     inner: Arc<Box<dyn FileHandle>>,
     encryption_key: Zeroizing<Vec<u8>>,
@@ -658,8 +660,8 @@ impl HasLen for EncryptedFileHandle {
 }
 
 impl FileHandle for EncryptedFileHandle {
-    fn read_bytes(&self, offset: usize, len: usize) -> Result<OwnedBytes, std::io::Error> {
-        let data = self.inner.read_bytes(offset, len)?;
+    fn read_bytes(&self, range: Range<usize>) -> Result<OwnedBytes, std::io::Error> {
+        let data = self.inner.read_bytes(range)?;
         // .map_err(|e| OpenReadError::IOError {
         //     io_error: e.into(),
         //     filepath: PathBuf::from("unknown"),

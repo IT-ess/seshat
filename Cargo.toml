@@ -28,7 +28,7 @@ bundled-sqlcipher = [
 ]
 
 [dependencies]
-tantivy = "0.14.0"
+tantivy = "0.15.0"
 # tantivy = "=0.12.0" # Element desktop tantivy version
 tinysegmenter = "0.1.1"
 rusqlite = "0.35.0"
