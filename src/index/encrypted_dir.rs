@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use std::{
     fs::File,
     io::{BufWriter, Cursor, Error as IoError, ErrorKind, Read, Write},
@@ -24,8 +24,8 @@ use std::{
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 use aes::{
-    cipher::{KeyIvInit, StreamCipher},
     Aes256,
+    cipher::{KeyIvInit, StreamCipher},
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac, NewMac};
@@ -33,12 +33,12 @@ use pbkdf2::pbkdf2;
 use sha2::{Sha256, Sha512};
 
 use tantivy::{
+    HasLen,
     directory::{
-        error::{DeleteError, LockError, OpenReadError, OpenWriteError},
         AntiCallToken, Directory, DirectoryLock, FileHandle, Lock, OwnedBytes, TerminatingWrite,
         WatchCallback, WatchHandle, WritePtr,
+        error::{DeleteError, LockError, OpenReadError, OpenWriteError},
     },
-    HasLen,
 };
 
 use zeroize::Zeroizing;
@@ -639,10 +639,10 @@ impl Directory for EncryptedMmapDirectory {
 // This Tantivy trait is used to indicate when no more writes are expected to be
 // done on a writer.
 impl<
-        E: StreamCipher + KeyIvInit + Send + Sync,
-        M: Mac + NewMac + Send + Sync,
-        W: Write + Send + Sync,
-    > TerminatingWrite for AesWriter<E, M, W>
+    E: StreamCipher + KeyIvInit + Send + Sync,
+    M: Mac + NewMac + Send + Sync,
+    W: Write + Send + Sync,
+> TerminatingWrite for AesWriter<E, M, W>
 {
     fn terminate_ref(&mut self, _: AntiCallToken) -> std::io::Result<()> {
         self.finalize()
@@ -661,6 +661,7 @@ struct EncryptedFileHandle {
 }
 
 impl HasLen for EncryptedFileHandle {
+    // TODO: improve this method, we are only returning the size of the encrypted file, which may not be what we expect
     fn len(&self) -> usize {
         self.file_length
     }
@@ -669,10 +670,6 @@ impl HasLen for EncryptedFileHandle {
 impl FileHandle for EncryptedFileHandle {
     fn read_bytes(&self, range: Range<usize>) -> Result<OwnedBytes, std::io::Error> {
         let data = self.inner.read_bytes(range)?;
-        // .map_err(|e| OpenReadError::IOError {
-        //     io_error: e.into(),
-        //     filepath: PathBuf::from("unknown"),
-        // })?;
 
         // Create a reader for decryption
         let mut reader = AesReader::<Aes256Ctr, _>::new::<Hmac<Sha256>>(
@@ -682,17 +679,9 @@ impl FileHandle for EncryptedFileHandle {
             self.iv_size,
             self.mac_length,
         )?;
-        // .map_err(|e| OpenReadError::IOError {
-        //     io_error: e.into(),
-        //     filepath: PathBuf::from("unknown"),
-        // })?;
 
         let mut decrypted = Vec::new();
         reader.read_to_end(&mut decrypted)?;
-        // .map_err(|e| OpenReadError::IOError {
-        //     io_error: e.into(),
-        //     filepath: PathBuf::from("unknown"),
-        // })?;
 
         Ok(OwnedBytes::new(decrypted))
     }
